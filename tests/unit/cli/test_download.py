@@ -69,6 +69,46 @@ def mock_fetch_tokens():
 
 
 class TestDownloadAudio:
+    def test_download_audio_passes_storage_path_to_client(self, runner, tmp_path):
+        with patch_client_for_module("download") as mock_client_cls:
+            mock_client = create_mock_client()
+
+            output_file = tmp_path / "audio.mp3"
+
+            async def mock_download_audio(notebook_id, output_path, artifact_id=None):
+                Path(output_path).write_bytes(b"fake audio content")
+                return output_path
+
+            mock_client.artifacts.list = AsyncMock(
+                return_value=[make_artifact("audio_123", "My Audio", 1)]
+            )
+            mock_client.artifacts.download_audio = mock_download_audio
+            mock_client_cls.return_value = mock_client
+
+            with (
+                patch.object(download_module, "fetch_tokens", new_callable=AsyncMock) as mock_fetch,
+                patch.object(download_module, "load_auth_from_storage") as mock_load,
+            ):
+                mock_load.return_value = {"SID": "test", "HSID": "test", "SSID": "test"}
+                mock_fetch.return_value = ("csrf", "session")
+                result = runner.invoke(
+                    cli,
+                    [
+                        "--storage",
+                        "/tmp/test-storage.json",
+                        "download",
+                        "audio",
+                        str(output_file),
+                        "-n",
+                        "nb_123",
+                    ],
+                )
+
+            assert result.exit_code == 0
+            mock_client_cls.assert_called()
+            _, kwargs = mock_client_cls.call_args
+            assert kwargs["storage_path"] == Path("/tmp/test-storage.json")
+
     def test_download_audio(self, runner, mock_auth, tmp_path):
         with patch_client_for_module("download") as mock_client_cls:
             mock_client = create_mock_client()

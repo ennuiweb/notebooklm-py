@@ -115,6 +115,7 @@ class TestFromStorage:
         assert client.auth.cookies["SID"] == "test_sid"
         assert client.auth.csrf_token == "csrf_token_abc"
         assert client.auth.session_id == "session_id_xyz"
+        assert client._core.storage_path == storage_file
 
     @pytest.mark.asyncio
     async def test_from_storage_file_not_found(self, tmp_path):

@@ -179,7 +179,7 @@ async def _download_artifacts_generic(
             )
 
     async def _download() -> dict[str, Any]:
-        async with NotebookLMClient(auth) as client:
+        async with NotebookLMClient(auth, storage_path=storage_path) as client:
             nb_id_resolved = await resolve_notebook_id(client, nb_id)
 
             # Setup download method dispatch
@@ -807,7 +807,7 @@ async def _download_interactive(
     csrf, session_id = await fetch_tokens(cookies)
     auth = AuthTokens(cookies=cookies, csrf_token=csrf, session_id=session_id)
 
-    async with NotebookLMClient(auth) as client:
+    async with NotebookLMClient(auth, storage_path=storage_path) as client:
         nb_id_resolved = await resolve_notebook_id(client, nb_id)
         ext = FORMAT_EXTENSIONS[output_format]
         path = output_path or f"{artifact_type}{ext}"

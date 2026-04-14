@@ -73,7 +73,12 @@ class NotebookLMClient:
         auth: The AuthTokens used for authentication
     """
 
-    def __init__(self, auth: AuthTokens, timeout: float = DEFAULT_TIMEOUT):
+    def __init__(
+        self,
+        auth: AuthTokens,
+        timeout: float = DEFAULT_TIMEOUT,
+        storage_path: Path | None = None,
+    ):
         """Initialize the NotebookLM client.
 
         Args:
@@ -82,7 +87,12 @@ class NotebookLMClient:
         """
         # Pass refresh_auth as callback for automatic retry on auth failures
         # Note: refresh_auth calls update_auth_headers internally
-        self._core = ClientCore(auth, timeout=timeout, refresh_callback=self.refresh_auth)
+        self._core = ClientCore(
+            auth,
+            timeout=timeout,
+            refresh_callback=self.refresh_auth,
+            storage_path=storage_path,
+        )
 
         # Initialize sub-client APIs
         # Note: notes must be initialized before artifacts (artifacts uses notes API)
@@ -139,7 +149,7 @@ class NotebookLMClient:
         """
         storage_path = Path(path) if path else None
         auth = await AuthTokens.from_storage(storage_path)
-        return cls(auth, timeout=timeout)
+        return cls(auth, timeout=timeout, storage_path=storage_path)
 
     async def refresh_auth(self) -> AuthTokens:
         """Refresh authentication tokens by fetching the NotebookLM homepage.
