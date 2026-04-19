@@ -95,6 +95,7 @@ GENERATION_TEST_DELAY = 15.0
 
 # Delay between chat tests (seconds) to avoid API rate limits from rapid ask() calls
 CHAT_TEST_DELAY = 5.0
+OPTIONAL_EMPTY_RESPONSE_ARTIFACT_TYPES = frozenset({"Infographic", "Slide deck"})
 
 
 def assert_generation_started(result, artifact_type: str = "Artifact") -> None:
@@ -114,6 +115,12 @@ def assert_generation_started(result, artifact_type: str = "Artifact") -> None:
 
     if result.is_rate_limited:
         pytest.skip("Rate limited by API")
+
+    if (
+        result.error_code == "EMPTY_GENERATION_RESPONSE"
+        and artifact_type in OPTIONAL_EMPTY_RESPONSE_ARTIFACT_TYPES
+    ):
+        pytest.skip(f"{artifact_type} generation is unavailable for this account/API session")
 
     assert result.task_id, f"{artifact_type} generation failed: {result.error}"
     assert result.status in (

@@ -295,6 +295,7 @@ class TestParseGenerationResult:
 
         assert result.status == "failed"
         assert result.task_id == ""
+        assert result.error_code == "EMPTY_GENERATION_RESPONSE"
         assert "no artifact_id" in result.error.lower()
 
     def test_parse_empty_list_result(self, mock_artifacts_api):
@@ -305,6 +306,7 @@ class TestParseGenerationResult:
 
         assert result.status == "failed"
         assert result.task_id == ""
+        assert result.error_code == "EMPTY_GENERATION_RESPONSE"
         assert "no artifact_id" in result.error.lower()
 
     def test_parse_valid_in_progress(self, mock_artifacts_api):

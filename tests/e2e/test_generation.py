@@ -274,7 +274,7 @@ class TestInfographicGeneration:
             generation_notebook_id,
             orientation=InfographicOrientation.PORTRAIT,
         )
-        assert_generation_started(result)
+        assert_generation_started(result, "Infographic")
 
     @pytest.mark.asyncio
     @pytest.mark.variants
@@ -285,7 +285,7 @@ class TestInfographicGeneration:
             detail_level=InfographicDetail.DETAILED,
             instructions="Include statistics and key findings",
         )
-        assert_generation_started(result)
+        assert_generation_started(result, "Infographic")
 
     @pytest.mark.asyncio
     @pytest.mark.variants
@@ -295,7 +295,7 @@ class TestInfographicGeneration:
             orientation=InfographicOrientation.SQUARE,
             detail_level=InfographicDetail.CONCISE,
         )
-        assert_generation_started(result)
+        assert_generation_started(result, "Infographic")
 
     @pytest.mark.asyncio
     @pytest.mark.variants
@@ -304,7 +304,7 @@ class TestInfographicGeneration:
             generation_notebook_id,
             orientation=InfographicOrientation.LANDSCAPE,
         )
-        assert_generation_started(result)
+        assert_generation_started(result, "Infographic")
 
 
 @requires_auth
@@ -318,7 +318,7 @@ class TestSlideDeckGeneration:
             generation_notebook_id,
             slide_format=SlideDeckFormat.PRESENTER_SLIDES,
         )
-        assert_generation_started(result)
+        assert_generation_started(result, "Slide deck")
 
     @pytest.mark.asyncio
     @pytest.mark.variants
@@ -329,7 +329,7 @@ class TestSlideDeckGeneration:
             slide_length=SlideDeckLength.DEFAULT,
             instructions="Include speaker notes",
         )
-        assert_generation_started(result)
+        assert_generation_started(result, "Slide deck")
 
     @pytest.mark.asyncio
     @pytest.mark.variants
@@ -339,7 +339,7 @@ class TestSlideDeckGeneration:
             slide_format=SlideDeckFormat.PRESENTER_SLIDES,
             slide_length=SlideDeckLength.SHORT,
         )
-        assert_generation_started(result)
+        assert_generation_started(result, "Slide deck")
 
 
 @requires_auth
