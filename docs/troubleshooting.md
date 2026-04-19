@@ -110,18 +110,29 @@ If the IDs don't match, the method ID has changed. Report the new ID in a GitHub
 
 ### Generation Failures
 
-#### Audio/Video generation returns None
+#### Artifact generation returns no artifact ID
 
-**Cause:** Known issue with artifact generation under heavy load or rate limiting.
+**Cause:** NotebookLM sometimes accepts a generation request but returns no
+artifact ID. This can happen under rate limiting, heavy load, or when a specific
+artifact type is unavailable for the current account/API session.
+
+The Python API reports this as a failed `GenerationStatus` with:
+
+- `error_code == "EMPTY_GENERATION_RESPONSE"`
+- `status == "failed"`
 
 **Workaround:**
 ```bash
-# Use --wait to see if it eventually succeeds
+# Retry later or with a different account/profile
 notebooklm generate audio --wait
 
-# Or poll manually
-notebooklm artifact poll <task_id>
+# Check whether any artifact was created despite the empty response
+notebooklm artifact list
 ```
+
+If `artifact list` shows no new artifact, there is no task ID to poll. Treat this
+as an upstream/account availability issue unless it reproduces for all artifact
+types and accounts.
 
 #### Mind map or data table "generates" but doesn't appear
 

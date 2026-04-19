@@ -187,6 +187,10 @@ NotebookLM has undocumented rate limits. Generation tests may be skipped when ra
 - Use `uv run pytest tests/e2e -m readonly` for quick validation
 - Wait a few minutes between full test runs
 - `SKIPPED (Rate limited by API)` is expected behavior, not failure
+- `SKIPPED (EMPTY_GENERATION_RESPONSE...)` is also expected when NotebookLM
+  returns no artifact ID for an account-gated or temporarily unavailable
+  generation type such as infographic or slide deck. Verify no artifact was
+  created before treating it as a parser regression.
 
 ### Writing New Tests
 
