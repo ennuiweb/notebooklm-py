@@ -2028,6 +2028,7 @@ class TestParseGenerationResult:
 
         assert result.status == "failed"
         assert result.task_id == ""
+        assert result.error_code == "EMPTY_GENERATION_RESPONSE"
 
     @pytest.mark.asyncio
     async def test_generate_returns_failed_status_when_result_is_none(
@@ -2059,6 +2060,7 @@ class TestParseGenerationResult:
             result = await client.artifacts.generate_audio("nb_123")
 
         assert result.status == "failed"
+        assert result.error_code == "EMPTY_GENERATION_RESPONSE"
 
     @pytest.mark.asyncio
     async def test_generate_returns_status_from_artifact_data(

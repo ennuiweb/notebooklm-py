@@ -2194,7 +2194,10 @@ class ArtifactsAPI:
                 return GenerationStatus(task_id=artifact_id, status=status)
 
         return GenerationStatus(
-            task_id="", status="failed", error="Generation failed - no artifact_id returned"
+            task_id="",
+            status="failed",
+            error="Generation failed - no artifact_id returned",
+            error_code="EMPTY_GENERATION_RESPONSE",
         )
 
     def _get_artifact_type_name(self, artifact_type: int) -> str:
