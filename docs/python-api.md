@@ -551,8 +551,14 @@ if final.is_complete:
     path = await client.artifacts.download_audio(nb_id, "podcast.mp3")
     print(f"Saved to: {path}")
 else:
-    print(f"Failed or timed out: {final.status}")
+    print(f"Failed or timed out: {final.status} {final.error_code or ''}")
 ```
+
+If generation returns `status == "failed"` with
+`error_code == "EMPTY_GENERATION_RESPONSE"`, NotebookLM did not return an
+artifact ID. This is usually an upstream/account availability issue for the
+requested artifact type; check `artifacts.list()` before retrying with another
+profile or later run.
 
 ---
 
