@@ -4,6 +4,7 @@ import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from notebooklm._artifacts import ArtifactsAPI
@@ -399,6 +400,17 @@ class TestMindMapGeneration:
 class TestDownloadUrl:
     """Test _download_url helper method."""
 
+    def test_download_cookies_prefers_live_client_jar(self, mock_artifacts_api):
+        """Downloads should reuse cookies rotated earlier in the live session."""
+        api, mock_core = mock_artifacts_api
+        live_cookies = httpx.Cookies()
+        mock_core.get_http_client.return_value.cookies = live_cookies
+
+        with patch("notebooklm._artifacts.load_httpx_cookies") as mock_load:
+            assert api._download_cookies() is live_cookies
+
+        mock_load.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_download_url_direct(self, mock_artifacts_api):
         """Test direct URL download using streaming."""
@@ -437,6 +449,10 @@ class TestDownloadUrl:
                 )
 
             assert result == output_path
+            mock_client.stream.assert_called_once()
+            _, requested_url = mock_client.stream.call_args.args[:2]
+            assert requested_url == "https://storage.googleapis.com/file.mp4?authuser=0"
+            assert mock_client.stream.call_args.kwargs["headers"]["x-goog-authuser"] == "0"
             # Verify file was written with streaming content
             with open(output_path, "rb") as f:
                 assert f.read() == content

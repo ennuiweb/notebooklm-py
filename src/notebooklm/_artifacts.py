@@ -14,7 +14,7 @@ import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 
@@ -65,6 +65,20 @@ _MEDIA_ARTIFACT_TYPES = frozenset(
     }
 )
 
+_TRUSTED_DOWNLOAD_DOMAINS = (
+    ".google.com",
+    ".googleusercontent.com",
+    ".usercontent.google.com",
+    ".googleapis.com",
+)
+
+_DOWNLOAD_HEADERS = {
+    "Accept": "audio/*,video/*,application/pdf,image/*,application/octet-stream,*/*",
+    "Origin": "https://notebooklm.google.com",
+    "Referer": "https://notebooklm.google.com/",
+    "x-goog-authuser": "0",
+}
+
 if TYPE_CHECKING:
     from ._notes import NotesAPI
 
@@ -85,6 +99,39 @@ def _extract_app_data(html_content: str) -> dict:
     encoded_json = match.group(1)
     decoded_json = html.unescape(encoded_json)
     return json.loads(decoded_json)
+
+
+def _download_url_with_authuser(url: str) -> str:
+    parsed = urlparse(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key != "authuser"
+    ]
+    query.append(("authuser", "0"))
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            urlencode(query),
+            parsed.fragment,
+        )
+    )
+
+
+def _validate_download_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ArtifactDownloadError("media", details=f"Download URL must use HTTPS: {url[:80]}")
+
+    host = parsed.hostname or ""
+    if not any(
+        host == domain.lstrip(".") or host.endswith(domain)
+        for domain in _TRUSTED_DOWNLOAD_DOMAINS
+    ):
+        raise ArtifactDownloadError("media", details=f"Untrusted download domain: {host}")
 
 
 def _format_quiz_markdown(title: str, questions: list[dict]) -> str:
@@ -241,6 +288,16 @@ class ArtifactsAPI:
         self._core = core
         self._notes = notes_api
         self._storage_path = storage_path
+
+    def _download_cookies(self) -> httpx.Cookies:
+        """Return the freshest domain-scoped cookies available for media URLs."""
+        try:
+            cookies = self._core.get_http_client().cookies
+        except RuntimeError:
+            cookies = None
+        if isinstance(cookies, httpx.Cookies):
+            return cookies
+        return load_httpx_cookies(path=self._storage_path)
 
     # =========================================================================
     # List/Get Operations
@@ -2077,8 +2134,9 @@ class ArtifactsAPI:
         """
         downloaded: list[str] = []
 
-        # Load cookies with domain info for cross-domain redirect handling
-        cookies = load_httpx_cookies(path=self._storage_path)
+        # Use the live jar when possible so media downloads benefit from cookie
+        # rotations that happened earlier in the same client session.
+        cookies = self._download_cookies()
 
         async with httpx.AsyncClient(
             cookies=cookies,
@@ -2088,20 +2146,12 @@ class ArtifactsAPI:
             for url, output_path in urls_and_paths:
                 try:
                     # Validate URL scheme and domain before sending auth cookies
-                    parsed = urlparse(url)
-                    if parsed.scheme != "https":
-                        raise ArtifactDownloadError(
-                            "media", details=f"Download URL must use HTTPS: {url[:80]}"
-                        )
-                    trusted = (".google.com", ".googleusercontent.com", ".googleapis.com")
-                    if not any(
-                        parsed.netloc == d.lstrip(".") or parsed.netloc.endswith(d) for d in trusted
-                    ):
-                        raise ArtifactDownloadError(
-                            "media", details=f"Untrusted download domain: {parsed.netloc}"
-                        )
+                    _validate_download_url(url)
 
-                    response = await client.get(url)
+                    response = await client.get(
+                        _download_url_with_authuser(url),
+                        headers=_DOWNLOAD_HEADERS,
+                    )
                     response.raise_for_status()
 
                     content_type = response.headers.get("content-type", "")
@@ -2141,14 +2191,7 @@ class ArtifactsAPI:
         # Validate URL scheme and domain before sending auth cookies.
         # httpx sends cookies to every request made by the client regardless of
         # domain, so we must ensure the URL belongs to a trusted Google domain.
-        parsed = urlparse(url)
-        if parsed.scheme != "https":
-            raise ArtifactDownloadError("media", details=f"Download URL must use HTTPS: {url[:80]}")
-        trusted = (".google.com", ".googleusercontent.com", ".googleapis.com")
-        if not any(parsed.netloc == d.lstrip(".") or parsed.netloc.endswith(d) for d in trusted):
-            raise ArtifactDownloadError(
-                "media", details=f"Untrusted download domain: {parsed.netloc}"
-            )
+        _validate_download_url(url)
 
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -2156,8 +2199,9 @@ class ArtifactsAPI:
         # Use temp file to avoid leaving corrupted partial files on failure
         temp_file = output_file.with_suffix(output_file.suffix + ".tmp")
 
-        # Load cookies with domain info for cross-domain redirect handling
-        cookies = load_httpx_cookies(path=self._storage_path)
+        # Use the live jar when possible so media downloads benefit from cookie
+        # rotations that happened earlier in the same client session.
+        cookies = self._download_cookies()
 
         # Use granular timeouts: 10s to connect, 30s per chunk read/write
         # This allows large files to download without timeout while still
@@ -2172,7 +2216,11 @@ class ArtifactsAPI:
                 follow_redirects=True,
                 timeout=timeout,
             ) as client:
-                async with client.stream("GET", url) as response:
+                async with client.stream(
+                    "GET",
+                    _download_url_with_authuser(url),
+                    headers=_DOWNLOAD_HEADERS,
+                ) as response:
                     response.raise_for_status()
 
                     content_type = response.headers.get("content-type", "")
