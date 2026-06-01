@@ -21,6 +21,7 @@ from notebooklm.rpc import (
 from notebooklm.types import (
     ArtifactNotReadyError,
     ArtifactParseError,
+    GenerationStatus,
 )
 
 
@@ -289,6 +290,32 @@ class TestGenerateQuiz:
 
         assert result is not None
         assert result.task_id == "quiz_123"
+
+    @pytest.mark.asyncio
+    async def test_generate_quiz_threads_language_into_request(
+        self,
+        auth_tokens,
+    ):
+        captured: dict[str, object] = {}
+
+        async with NotebookLMClient(auth_tokens) as client:
+            async def fake_call_generate(notebook_id, params):
+                captured["notebook_id"] = notebook_id
+                captured["params"] = params
+                return GenerationStatus(task_id="quiz_123", status="processing")
+
+            client.artifacts._call_generate = fake_call_generate  # type: ignore[method-assign]
+
+            result = await client.artifacts.generate_quiz(
+                "nb_123",
+                source_ids=["source_123"],
+                instructions="Skriv på dansk.",
+                language="da",
+            )
+
+        params = captured["params"]
+        assert result.task_id == "quiz_123"
+        assert params[2][9][1][3] == "da"  # type: ignore[index]
 
 
 class TestDeleteStudioContent:

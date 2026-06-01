@@ -725,6 +725,7 @@ class ArtifactsAPI:
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
         instructions: str | None = None,
+        language: str = "en",
         quantity: QuizQuantity | None = None,
         difficulty: QuizDifficulty | None = None,
     ) -> GenerationStatus:
@@ -734,6 +735,7 @@ class ArtifactsAPI:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
             instructions: Custom instructions for quiz generation.
+            language: Language code (default: "en").
             quantity: FEWER, STANDARD, or MORE questions.
             difficulty: EASY, MEDIUM, or HARD.
 
@@ -766,7 +768,7 @@ class ArtifactsAPI:
                         2,  # Variant: quiz
                         None,
                         instructions,
-                        None,
+                        language,
                         None,
                         None,
                         None,
@@ -782,6 +784,7 @@ class ArtifactsAPI:
         notebook_id: str,
         source_ids: builtins.list[str] | None = None,
         instructions: str | None = None,
+        language: str = "en",
         quantity: QuizQuantity | None = None,
         difficulty: QuizDifficulty | None = None,
     ) -> GenerationStatus:
@@ -791,6 +794,7 @@ class ArtifactsAPI:
             notebook_id: The notebook ID.
             source_ids: Source IDs to include. If None, uses all sources.
             instructions: Custom instructions for flashcard generation.
+            language: Language code (default: "en").
             quantity: FEWER, STANDARD, or MORE cards.
             difficulty: EASY, MEDIUM, or HARD.
 
@@ -823,7 +827,7 @@ class ArtifactsAPI:
                         1,  # Variant: flashcards
                         None,
                         instructions,
-                        None,
+                        language,
                         None,
                         None,
                         [difficulty_code, quantity_code],
