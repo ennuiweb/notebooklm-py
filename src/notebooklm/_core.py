@@ -46,6 +46,7 @@ AUTH_ERROR_PATTERNS = (
     "authentication",
     "expired",
     "unauthorized",
+    "unauthenticated",
     "login",
     "re-authenticate",
 )
@@ -82,8 +83,13 @@ def is_auth_error(error: Exception) -> bool:
     if isinstance(error, AuthError):
         return True
 
-    # Don't treat network/rate limit/server errors as auth errors
-    # even if they're subclasses of RPCError
+    # RPC status 16 is Google's canonical UNAUTHENTICATED status. Prefer the
+    # structured field before subtype/message heuristics.
+    if isinstance(error, RPCError) and error.rpc_code in (16, "16", "UNAUTHENTICATED"):
+        return True
+
+    # Don't treat network/rate limit/server errors as auth errors merely because
+    # their text happens to contain a broad auth token.
     if isinstance(
         error,
         NetworkError | RPCTimeoutError | RateLimitError | ServerError | ClientError,
@@ -94,7 +100,7 @@ def is_auth_error(error: Exception) -> bool:
     if isinstance(error, httpx.HTTPStatusError):
         return error.response.status_code in (401, 403)
 
-    # RPCError with auth-related message
+    # Retain a message fallback for older decoders without structured status.
     if isinstance(error, RPCError):
         message = str(error).lower()
         return any(pattern in message for pattern in AUTH_ERROR_PATTERNS)

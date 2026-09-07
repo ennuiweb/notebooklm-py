@@ -362,6 +362,8 @@ class AuthTokens:
         """
         if path is None and (profile is not None or "NOTEBOOKLM_AUTH_JSON" not in os.environ):
             path = get_storage_path(profile=profile)
+        if path is not None:
+            path = canonical_storage_path(path)
 
         # Build the cookie jar via the lossless loader so path/secure/httpOnly
         # survive into the live jar. The earlier
@@ -1061,6 +1063,23 @@ def build_cookie_jar(
 _LOCK_CONTENTION_ERRNOS = {errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES}
 
 
+class StorageLockError(RuntimeError):
+    """Profile storage cannot be coordinated safely across processes."""
+
+
+class CookiePersistenceError(RuntimeError):
+    """Refreshed authentication cookies could not be durably persisted."""
+
+
+class ProfileLeaseError(RuntimeError):
+    """A profile is already leased by another live client process."""
+
+
+def canonical_storage_path(path: Path) -> Path:
+    """Return one stable absolute identity for a profile storage path."""
+    return path.expanduser().resolve(strict=False)
+
+
 @contextlib.contextmanager
 def _file_lock(lock_path: Path, *, blocking: bool, log_prefix: str) -> Iterator[str]:
     """Cross-process exclusive lock on ``lock_path``.
@@ -1070,14 +1089,8 @@ def _file_lock(lock_path: Path, *, blocking: bool, log_prefix: str) -> Iterator[
       - ``"contended"`` — non-blocking acquire saw the lock held elsewhere.
         Only ever yielded when ``blocking=False``.
       - ``"unavailable"`` — lock infrastructure failed (cannot mkdir, cannot
-        open the sentinel, NFS without flock support). Caller should
-        **fail open** (proceed without coordination) rather than retry forever.
-
-    Wrappers translate this tristate into bool. Distinguishing contention from
-    infrastructure failure matters: a non-blocking caller should **skip** on
-    contention (someone else is rotating) but **proceed** on infrastructure
-    failure (otherwise a read-only auth dir would permanently suppress
-    rotation).
+        open the sentinel, NFS without flock support). Callers must fail closed
+        rather than risk concurrent stale-cookie writes.
     """
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1131,6 +1144,19 @@ def _file_lock(lock_path: Path, *, blocking: bool, log_prefix: str) -> Iterator[
 
 
 @contextlib.contextmanager
+def profile_storage_lease(storage_path: Path) -> Iterator[None]:
+    """Hold a non-blocking, process-wide lease for one profile lifetime."""
+    storage_path = canonical_storage_path(storage_path)
+    lock_path = storage_path.with_name(f".{storage_path.name}.lease.lock")
+    with _file_lock(lock_path, blocking=False, log_prefix="profile lease") as state:
+        if state == "contended":
+            raise ProfileLeaseError(f"Profile is already in use: {storage_path}")
+        if state != "held":
+            raise StorageLockError(f"Profile lease unavailable: {lock_path}")
+        yield
+
+
+@contextlib.contextmanager
 def _file_lock_exclusive(lock_path: Path) -> Iterator[None]:
     """Blocking cross-process exclusive lock on ``lock_path``.
 
@@ -1142,11 +1168,14 @@ def _file_lock_exclusive(lock_path: Path) -> Iterator[None]:
     the storage file itself would interfere with the atomic temp-rename below.
 
     The lock is per-process: threads within one process aren't serialized —
-    that's the intra-process ``threading.Lock`` in ``ClientCore``. If the
-    lock can't be acquired (e.g. NFS where flock semantics vary), the save
-    proceeds anyway; correctness on NFS is best-effort.
+    that's the intra-process ``threading.Lock`` in ``ClientCore``. Lock
+    infrastructure failure aborts persistence; silently writing without the
+    lock can overwrite fresher credentials from another process.
     """
-    with _file_lock(lock_path, blocking=True, log_prefix="save_cookies_to_storage"):
+    lock_path = canonical_storage_path(lock_path)
+    with _file_lock(lock_path, blocking=True, log_prefix="save_cookies_to_storage") as state:
+        if state != "held":
+            raise StorageLockError(f"Profile storage lock unavailable: {lock_path}")
         yield
 
 
@@ -1181,6 +1210,7 @@ def save_cookies_to_storage(cookie_jar: httpx.Cookies, path: Path | None = None)
         logger.debug("Skipping cookie sync: No storage file path available")
         return
 
+    path = canonical_storage_path(path)
     lock_path = path.with_name(f".{path.name}.lock")
     with _file_lock_exclusive(lock_path):
         if not path.exists():
@@ -1248,18 +1278,27 @@ def save_cookies_to_storage(cookie_jar: httpx.Cookies, path: Path | None = None)
                     suffix=".tmp",
                     delete=False,
                 ) as temp_file:
-                    temp_file.write(json.dumps(storage_data, indent=2, ensure_ascii=False))
                     temp_path = Path(temp_file.name)
+                    temp_file.write(json.dumps(storage_data, indent=2, ensure_ascii=False))
+                    temp_file.flush()
+                    os.fsync(temp_file.fileno())
                 os.chmod(temp_path, 0o600)
-                temp_path.replace(path)
+                os.replace(temp_path, path)
+                parent_fd = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(parent_fd)
+                finally:
+                    os.close(parent_fd)
                 logger.debug("Successfully synced %d refreshed cookies to %s", updated_count, path)
             except Exception as e:
-                logger.warning("Failed to write updated cookies to %s: %s", path, e)
                 if temp_path is not None:
                     try:
                         temp_path.unlink(missing_ok=True)
                     except Exception as cleanup_err:
                         logger.debug("Failed to clean up temp file %s: %s", temp_path, cleanup_err)
+                raise CookiePersistenceError(
+                    f"Failed to durably persist refreshed cookies to {path}"
+                ) from e
 
 
 def _cookie_is_http_only(cookie: Any) -> bool:
@@ -1621,6 +1660,7 @@ def _rotation_lock_path(storage_path: Path | None) -> Path | None:
     """
     if storage_path is None:
         return None
+    storage_path = canonical_storage_path(storage_path)
     return storage_path.with_name(f".{storage_path.name}.rotate.lock")
 
 
@@ -1632,14 +1672,13 @@ def _file_lock_try_exclusive(lock_path: Path) -> Iterator[bool]:
       - genuine contention (another process holds the lock) → yield ``False``,
         caller skips its work (the holder is rotating; we don't need to)
       - lock infrastructure unavailable (read-only dir, NFS without flock,
-        permission denied) → yield ``True``, caller **fails open** and
-        proceeds without coordination, since waiting forever for an
-        unworkable lock would permanently suppress rotation.
+        permission denied) → raise rather than rotate without coordination.
     """
+    lock_path = canonical_storage_path(lock_path)
     with _file_lock(lock_path, blocking=False, log_prefix="rotate lock") as state:
-        # "held" → True (proceed, we own it); "unavailable" → True (fail open);
-        # "contended" → False (someone else is rotating, skip).
-        yield state != "contended"
+        if state == "unavailable":
+            raise StorageLockError(f"Rotation lock unavailable: {lock_path}")
+        yield state == "held"
 
 
 def _is_recently_rotated(storage_path: Path | None) -> bool:
@@ -1847,7 +1886,7 @@ async def _fetch_tokens_with_jar(
     async with httpx.AsyncClient(cookies=cookie_jar) as client:
         await _poke_session(client, storage_path)
 
-        homepage_url = "https://notebooklm.google.com/"
+        homepage_url = "https://notebook.google.com/"
         if authuser:
             homepage_url += f"?authuser={authuser}"
         response = await client.get(

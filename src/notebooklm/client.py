@@ -35,7 +35,7 @@ from ._settings import SettingsAPI
 from ._sharing import SharingAPI
 from ._sources import SourcesAPI
 from ._url_utils import is_google_auth_redirect
-from .auth import AuthTokens
+from .auth import AuthTokens, canonical_storage_path, profile_storage_lease
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,10 @@ class NotebookLMClient:
         # of in-place mutation so a caller reusing ``AuthTokens`` across
         # multiple clients (with different storage paths) doesn't see one
         # client's path leak into another.
+        if storage_path is not None:
+            storage_path = canonical_storage_path(storage_path)
+        elif isinstance(auth.storage_path, (str, Path)):
+            storage_path = canonical_storage_path(Path(auth.storage_path))
         if storage_path is not None and auth.storage_path != storage_path:
             auth = dataclasses.replace(auth, storage_path=storage_path)
 
@@ -132,22 +136,48 @@ class NotebookLMClient:
         self.research = ResearchAPI(self._core)
         self.settings = SettingsAPI(self._core)
         self.sharing = SharingAPI(self._core)
+        self._profile_lease = None
 
     @property
     def auth(self) -> AuthTokens:
         """Get the authentication tokens."""
         return self._core.auth
 
+    def _acquire_profile_lease(self) -> None:
+        storage_path = self._core.auth.storage_path
+        if self._profile_lease is not None or not isinstance(storage_path, (str, Path)):
+            return
+        lease = profile_storage_lease(Path(storage_path))
+        lease.__enter__()
+        self._profile_lease = lease
+
+    def _release_profile_lease(self) -> None:
+        lease, self._profile_lease = self._profile_lease, None
+        if lease is not None:
+            lease.__exit__(None, None, None)
+
     async def __aenter__(self) -> "NotebookLMClient":
-        """Open the client connection."""
+        """Acquire the profile lease and open the client connection."""
         logger.debug("Opening NotebookLM client")
-        await self._core.open()
+        self._acquire_profile_lease()
+        try:
+            await self._core.open()
+        except BaseException:
+            self._release_profile_lease()
+            raise
         return self
 
+    async def close(self) -> None:
+        """Close the connection and release this client's profile lease."""
+        try:
+            await self._core.close()
+        finally:
+            self._release_profile_lease()
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Close the client connection."""
+        """Close the client connection and release the profile lease."""
         logger.debug("Closing NotebookLM client")
-        await self._core.close()
+        await self.close()
 
     @property
     def is_connected(self) -> bool:
@@ -194,21 +224,33 @@ class NotebookLMClient:
                 ...
         """
         storage_path = Path(path) if path else None
-        auth = await AuthTokens.from_storage(storage_path, profile=profile)
-        # Always resolve the storage path so downstream cookie loading
-        # (e.g. artifact downloads) uses the correct file, whether the
-        # caller provided an explicit path, a named profile, or neither.
         if storage_path is None and not os.environ.get("NOTEBOOKLM_AUTH_JSON"):
             from .paths import get_storage_path
 
             storage_path = get_storage_path(profile)
-        return cls(
-            auth,
-            timeout=timeout,
-            storage_path=storage_path,
-            keepalive=keepalive,
-            keepalive_min_interval=keepalive_min_interval,
-        )
+        if storage_path is not None:
+            storage_path = canonical_storage_path(storage_path)
+
+        # Token fetching can rotate and persist cookies, so acquire the same
+        # lifetime lease before loading auth and transfer it to the client.
+        lease = profile_storage_lease(storage_path) if storage_path is not None else None
+        if lease is not None:
+            lease.__enter__()
+        try:
+            auth = await AuthTokens.from_storage(storage_path, profile=profile)
+            client = cls(
+                auth,
+                timeout=timeout,
+                storage_path=storage_path,
+                keepalive=keepalive,
+                keepalive_min_interval=keepalive_min_interval,
+            )
+            client._profile_lease = lease
+            return client
+        except BaseException:
+            if lease is not None:
+                lease.__exit__(None, None, None)
+            raise
 
     async def refresh_auth(self) -> AuthTokens:
         """Refresh authentication tokens by fetching the NotebookLM homepage.
@@ -224,7 +266,7 @@ class NotebookLMClient:
         """
         http_client = self._core.get_http_client()
         authuser = self._core.auth.authuser
-        homepage_url = "https://notebooklm.google.com/"
+        homepage_url = "https://notebook.google.com/"
         if authuser:
             homepage_url += f"?authuser={authuser}"
         response = await http_client.get(

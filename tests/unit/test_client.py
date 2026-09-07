@@ -107,7 +107,7 @@ class TestFromStorage:
         # Mock token fetch
         html = '"SNlM0e":"csrf_token_abc" "FdrFJe":"session_id_xyz"'
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             content=html.encode(),
         )
 
@@ -190,7 +190,7 @@ class TestRefreshAuth:
         </html>
         """
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             content=html.encode(),
         )
 
@@ -208,7 +208,7 @@ class TestRefreshAuth:
         mock_auth.authuser = 4
         client = NotebookLMClient(mock_auth)
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/?authuser=4",
+            url="https://notebook.google.com/?authuser=4",
             content=b'"SNlM0e":"csrf" "FdrFJe":"session"',
         )
 
@@ -229,7 +229,7 @@ class TestRefreshAuth:
         # by providing a response that doesn't contain the expected tokens
         html = "<html><body>Please sign in</body></html>"  # No tokens
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             content=html.encode(),
         )
 
@@ -245,7 +245,7 @@ class TestRefreshAuth:
         # Mock response without CSRF token
         html = '"FdrFJe":"session_only"'  # Missing SNlM0e
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             content=html.encode(),
         )
 
@@ -261,7 +261,7 @@ class TestRefreshAuth:
         # Mock response without session ID
         html = '"SNlM0e":"csrf_only"'  # Missing FdrFJe
         httpx_mock.add_response(
-            url="https://notebooklm.google.com/",
+            url="https://notebook.google.com/",
             content=html.encode(),
         )
 
