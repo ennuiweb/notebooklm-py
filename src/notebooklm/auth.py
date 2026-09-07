@@ -123,7 +123,12 @@ def _validate_required_cookies(
         extra_diagnostics: Optional extra lines inserted into the Tier 1 error
             (e.g. observed cookies, source domains) for friendlier diagnosis.
     """
-    missing = MINIMUM_REQUIRED_COOKIES - cookie_names
+    # Tier 1 requires SID and at least one primary session cookie (__Secure-1PSIDTS or __Secure-1PSID).
+    missing = set()
+    if "SID" not in cookie_names:
+        missing.add("SID")
+    if not ({"__Secure-1PSIDTS", "__Secure-1PSID"} & cookie_names):
+        missing.add("__Secure-1PSIDTS")
     if missing:
         missing_names = ", ".join(sorted(missing))
         parts = [f"Missing required cookies{context}: {missing_names}"]
