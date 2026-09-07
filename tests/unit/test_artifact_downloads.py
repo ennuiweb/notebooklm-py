@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from notebooklm._artifacts import ArtifactsAPI
+from notebooklm._artifacts import ArtifactsAPI, _download_url_with_authuser
 from notebooklm.auth import AuthTokens
 from notebooklm.types import (
     ArtifactDownloadError,
@@ -15,6 +15,13 @@ from notebooklm.types import (
     ArtifactNotReadyError,
     ArtifactParseError,
 )
+
+
+def test_download_url_routes_nonzero_authuser():
+    assert (
+        _download_url_with_authuser("https://storage.googleapis.com/file.mp4?authuser=0", 5)
+        == "https://storage.googleapis.com/file.mp4?authuser=5"
+    )
 
 
 @pytest.fixture
@@ -31,6 +38,7 @@ def mock_artifacts_api():
     """Create an ArtifactsAPI with mocked core and notes API."""
     mock_core = MagicMock()
     mock_core.rpc_call = AsyncMock()
+    mock_core.auth.authuser = 0
     mock_core.get_source_ids = AsyncMock(return_value=[])
     mock_notes = MagicMock()
     mock_notes.list_mind_maps = AsyncMock(return_value=[])

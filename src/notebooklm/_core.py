@@ -205,6 +205,7 @@ class ClientCore:
             self._http_client = httpx.AsyncClient(
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                    "x-goog-authuser": str(self.auth.authuser),
                 },
                 cookies=cookies,
                 timeout=timeout,
@@ -365,6 +366,7 @@ class ClientCore:
             raise RuntimeError("Client not initialized. Use 'async with' context.")
 
         self.auth.cookie_jar = self._http_client.cookies
+        self._http_client.headers["x-goog-authuser"] = str(self.auth.authuser)
 
     def _build_url(self, rpc_method: RPCMethod, source_path: str = "/") -> str:
         """Build the batchexecute URL for an RPC call.
@@ -380,6 +382,7 @@ class ClientCore:
             "rpcids": rpc_method.value,
             "source-path": source_path,
             "f.sid": self.auth.session_id,
+            "authuser": str(self.auth.authuser),
             "rt": "c",
         }
         return f"{BATCHEXECUTE_URL}?{urlencode(params)}"

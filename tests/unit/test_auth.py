@@ -22,6 +22,7 @@ from notebooklm.auth import (
     convert_rookiepy_cookies_to_storage_state,
     extract_cookies_from_storage,
     extract_cookies_with_domains,
+    extract_authuser_from_storage,
     extract_csrf_from_html,
     extract_session_id_from_html,
     fetch_tokens,
@@ -74,6 +75,27 @@ class TestAuthTokens:
         )
         header = tokens.cookie_header
         assert "; " in header
+
+    def test_authuser_defaults_to_zero(self):
+        tokens = AuthTokens(cookies={}, csrf_token="csrf", session_id="sid")
+        assert tokens.authuser == 0
+
+    def test_authuser_nonzero(self):
+        tokens = AuthTokens(cookies={}, csrf_token="csrf", session_id="sid", authuser=7)
+        assert tokens.authuser == 7
+
+    @pytest.mark.parametrize("value", [-1, True, "1", 1.5])
+    def test_authuser_rejects_malformed_values(self, value):
+        with pytest.raises(ValueError, match="non-negative integer"):
+            AuthTokens(cookies={}, csrf_token="csrf", session_id="sid", authuser=value)
+
+    def test_storage_authuser_metadata(self):
+        assert extract_authuser_from_storage({"cookies": []}) == 0
+        assert extract_authuser_from_storage(
+            {"cookies": [], "notebooklm": {"authuser": 6}}
+        ) == 6
+        with pytest.raises(ValueError, match="required"):
+            extract_authuser_from_storage({"cookies": [], "notebooklm": {}})
 
 
 class TestExtractCookies:
@@ -885,6 +907,25 @@ class TestFetchTokens:
 
         assert csrf == "AF1_QpN-csrf_token_123"
         assert session_id == "session_id_456"
+
+    @pytest.mark.asyncio
+    async def test_nonzero_authuser_routes_token_request(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv(NOTEBOOKLM_DISABLE_KEEPALIVE_POKE_ENV, "1")
+        httpx_mock.add_response(
+            url="https://notebooklm.google.com/?authuser=6",
+            content=b'"SNlM0e":"csrf" "FdrFJe":"session"',
+        )
+        jar = httpx.Cookies({"SID": "test"})
+
+        csrf, session_id = await auth_module._fetch_tokens_with_jar(
+            jar, authuser=6
+        )
+
+        assert (csrf, session_id) == ("csrf", "session")
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["x-goog-authuser"] == "6"
 
     @pytest.mark.asyncio
     async def test_fetch_tokens_success_preserves_input_without_refresh(

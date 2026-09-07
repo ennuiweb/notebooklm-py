@@ -76,7 +76,6 @@ _DOWNLOAD_HEADERS = {
     "Accept": "audio/*,video/*,application/pdf,image/*,application/octet-stream,*/*",
     "Origin": "https://notebooklm.google.com",
     "Referer": "https://notebooklm.google.com/",
-    "x-goog-authuser": "0",
 }
 
 if TYPE_CHECKING:
@@ -101,14 +100,14 @@ def _extract_app_data(html_content: str) -> dict:
     return json.loads(decoded_json)
 
 
-def _download_url_with_authuser(url: str) -> str:
+def _download_url_with_authuser(url: str, authuser: int = 0) -> str:
     parsed = urlparse(url)
     query = [
         (key, value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
         if key != "authuser"
     ]
-    query.append(("authuser", "0"))
+    query.append(("authuser", str(authuser)))
     return urlunparse(
         (
             parsed.scheme,
@@ -2152,9 +2151,10 @@ class ArtifactsAPI:
                     # Validate URL scheme and domain before sending auth cookies
                     _validate_download_url(url)
 
+                    authuser = self._core.auth.authuser
                     response = await client.get(
-                        _download_url_with_authuser(url),
-                        headers=_DOWNLOAD_HEADERS,
+                        _download_url_with_authuser(url, authuser),
+                        headers={**_DOWNLOAD_HEADERS, "x-goog-authuser": str(authuser)},
                     )
                     response.raise_for_status()
 
@@ -2220,10 +2220,11 @@ class ArtifactsAPI:
                 follow_redirects=True,
                 timeout=timeout,
             ) as client:
+                authuser = self._core.auth.authuser
                 async with client.stream(
                     "GET",
-                    _download_url_with_authuser(url),
-                    headers=_DOWNLOAD_HEADERS,
+                    _download_url_with_authuser(url, authuser),
+                    headers={**_DOWNLOAD_HEADERS, "x-goog-authuser": str(authuser)},
                 ) as response:
                     response.raise_for_status()
 

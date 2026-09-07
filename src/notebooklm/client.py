@@ -223,7 +223,14 @@ class NotebookLMClient:
             ValueError: If token extraction fails (page structure may have changed).
         """
         http_client = self._core.get_http_client()
-        response = await http_client.get("https://notebooklm.google.com/")
+        authuser = self._core.auth.authuser
+        homepage_url = "https://notebooklm.google.com/"
+        if authuser:
+            homepage_url += f"?authuser={authuser}"
+        response = await http_client.get(
+            homepage_url,
+            headers={"x-goog-authuser": str(authuser)},
+        )
         response.raise_for_status()
 
         # Check for redirect to login page

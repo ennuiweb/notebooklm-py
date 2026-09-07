@@ -204,6 +204,21 @@ class TestRefreshAuth:
             assert client.auth.session_id == "new_session_id_456"
 
     @pytest.mark.asyncio
+    async def test_refresh_auth_routes_nonzero_authuser(self, mock_auth, httpx_mock: HTTPXMock):
+        mock_auth.authuser = 4
+        client = NotebookLMClient(mock_auth)
+        httpx_mock.add_response(
+            url="https://notebooklm.google.com/?authuser=4",
+            content=b'"SNlM0e":"csrf" "FdrFJe":"session"',
+        )
+
+        async with client:
+            await client.refresh_auth()
+
+        request = httpx_mock.get_requests()[0]
+        assert request.headers["x-goog-authuser"] == "4"
+
+    @pytest.mark.asyncio
     async def test_refresh_auth_redirect_to_login(self, mock_auth, httpx_mock: HTTPXMock):
         """Test refresh_auth raises error on redirect to login - by final URL check."""
         client = NotebookLMClient(mock_auth)

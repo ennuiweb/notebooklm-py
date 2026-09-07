@@ -13,6 +13,7 @@ def mock_core():
     core = MagicMock()
     core.rpc_call = AsyncMock()
     core.auth = MagicMock()
+    core.auth.authuser = 0
     # Upload paths pass the live http client's cookie jar to httpx so cookies
     # are scoped by Domain attribute (#373). The mock makes auth.cookie_jar and
     # get_http_client().cookies the same sentinel so existing assertions still
@@ -188,6 +189,26 @@ class TestStartResumableUpload:
         assert result == "https://upload.example.com/session123"
 
     @pytest.mark.asyncio
+    async def test_start_resumable_upload_routes_nonzero_authuser(
+        self, sources_api, mock_core
+    ):
+        mock_core.auth.authuser = 4
+        mock_response = MagicMock()
+        mock_response.headers = {"x-goog-upload-url": "https://upload.example.com/session"}
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_client.post.return_value = mock_response
+            mock_client_cls.return_value = mock_client
+
+            await sources_api._start_resumable_upload("nb", "test.pdf", 12, "src")
+
+        call = mock_client.post.call_args
+        assert str(call.args[0]).endswith("?authuser=4")
+        assert call.kwargs["headers"]["x-goog-authuser"] == "4"
+
+    @pytest.mark.asyncio
     async def test_start_resumable_upload_includes_correct_headers(self, sources_api, mock_core):
         """Test that upload start includes correct headers."""
         mock_response = MagicMock()
@@ -309,6 +330,7 @@ class TestUploadFileStreaming:
         self, sources_api, mock_core, tmp_path
     ):
         """Test that streaming upload includes correct headers."""
+        mock_core.auth.authuser = 7
         test_file = tmp_path / "test.txt"
         test_file.write_bytes(b"content")
         mock_response = MagicMock()
@@ -329,6 +351,7 @@ class TestUploadFileStreaming:
 
             assert headers["x-goog-upload-command"] == "upload, finalize"
             assert headers["x-goog-upload-offset"] == "0"
+            assert headers["x-goog-authuser"] == "7"
             # Cookie header is no longer set manually; httpx scopes cookies
             # by Domain attribute via the cookie_jar kwarg (#373).
             assert "Cookie" not in headers

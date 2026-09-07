@@ -950,14 +950,15 @@ class SourcesAPI:
         """Start a resumable upload session and get the upload URL."""
         import json
 
-        url = f"{UPLOAD_URL}?authuser=0"
+        authuser = self._core.auth.authuser
+        url = f"{UPLOAD_URL}?authuser={authuser}"
 
         headers = {
             "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
             "Origin": "https://notebooklm.google.com",
             "Referer": "https://notebooklm.google.com/",
-            "x-goog-authuser": "0",
+            "x-goog-authuser": str(authuser),
             "x-goog-upload-command": "start",
             "x-goog-upload-header-content-length": str(file_size),
             "x-goog-upload-protocol": "resumable",
@@ -1005,12 +1006,13 @@ class SourcesAPI:
             upload_url: The resumable upload URL from _start_resumable_upload.
             file_path: Path to the file to upload.
         """
+        authuser = self._core.auth.authuser
         headers = {
             "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
             "Origin": "https://notebooklm.google.com",
             "Referer": "https://notebooklm.google.com/",
-            "x-goog-authuser": "0",
+            "x-goog-authuser": str(authuser),
             "x-goog-upload-command": "upload, finalize",
             "x-goog-upload-offset": "0",
         }

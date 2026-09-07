@@ -164,6 +164,8 @@ ALLOWED_COOKIE_DOMAINS = {
     # Playwright storage_state may preserve the leading dot for NotebookLM cookies.
     ".notebooklm.google.com",
     "notebooklm.google.com",
+    ".notebook.google.com",
+    "notebook.google.com",
     ".googleusercontent.com",
     "accounts.google.com",  # Required for token refresh redirects
     ".accounts.google.com",  # http.cookiejar may normalize Domain=accounts.google.com
@@ -294,9 +296,11 @@ class AuthTokens:
     session_id: str
     storage_path: Path | None = None
     cookie_jar: httpx.Cookies | None = None
+    authuser: int = 0
 
     def __post_init__(self) -> None:
-        """Normalize legacy flat cookie mappings into domain-keyed mappings."""
+        """Normalize cookies and validate the selected Google account."""
+        self.authuser = _validate_authuser(self.authuser)
         self.cookies = normalize_cookie_map(self.cookies)
         if self.cookie_jar is None:
             self.cookie_jar = build_cookie_jar(cookies=self.cookies, storage_path=self.storage_path)
@@ -359,8 +363,12 @@ class AuthTokens:
         # extract_cookies_with_domains -> build_cookie_jar pipeline only carried
         # (name, domain) -> value and dropped the same attributes the load
         # paths in #365 fixed.
+        storage_state = _load_storage_state(path)
+        authuser = extract_authuser_from_storage(storage_state)
         jar = build_httpx_cookies_from_storage(path)
-        csrf_token, session_id, _ = await _fetch_tokens_with_refresh(jar, path, profile)
+        csrf_token, session_id, _ = await _fetch_tokens_with_refresh(
+            jar, path, profile, authuser=authuser
+        )
 
         # Persist any refreshed cookies from the token fetch
         save_cookies_to_storage(jar, path)
@@ -372,7 +380,32 @@ class AuthTokens:
             session_id=session_id,
             storage_path=path,
             cookie_jar=jar,
+            authuser=authuser,
         )
+
+
+def _validate_authuser(value: Any) -> int:
+    """Validate a Google multi-login selector without coercing ambiguous values."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("notebooklm.authuser must be a non-negative integer")
+    return value
+
+
+def extract_authuser_from_storage(storage_state: dict[str, Any]) -> int:
+    """Read ``notebooklm.authuser`` metadata; legacy storage states select account 0."""
+    metadata = storage_state.get("notebooklm")
+    if metadata is None:
+        return 0
+    if not isinstance(metadata, dict):
+        raise ValueError("notebooklm storage metadata must be an object")
+    if "authuser" not in metadata:
+        raise ValueError("notebooklm.authuser is required when metadata is present")
+    return _validate_authuser(metadata["authuser"])
+
+
+def _authuser_from_path(path: Path | None) -> int:
+    """Resolve the account selector from the same storage source as cookies."""
+    return extract_authuser_from_storage(_load_storage_state(path))
 
 
 def normalize_cookie_map(cookies: CookieInput | None) -> DomainCookieMap:
@@ -1396,10 +1429,13 @@ async def _fetch_tokens_with_refresh(
     cookie_jar: httpx.Cookies,
     storage_path: Path | None = None,
     profile: str | None = None,
+    authuser: int = 0,
 ) -> tuple[str, str, bool]:
     """Fetch tokens, optionally running NOTEBOOKLM_REFRESH_CMD on auth expiry."""
     try:
-        csrf, session_id = await _fetch_tokens_with_jar(cookie_jar, storage_path)
+        csrf, session_id = await _fetch_tokens_with_jar(
+            cookie_jar, storage_path, authuser=authuser
+        )
         return csrf, session_id, False
     except ValueError as err:
         if not _should_try_refresh(err):
@@ -1420,7 +1456,12 @@ async def _fetch_tokens_with_refresh(
                     _REFRESH_GENERATIONS[refresh_key] = refresh_generation + 1
                 fresh_jar = build_httpx_cookies_from_storage(refresh_storage_path)
                 _replace_cookie_jar(cookie_jar, fresh_jar)
-            csrf, session_id = await _fetch_tokens_with_jar(cookie_jar, refresh_storage_path)
+            refreshed_authuser = _authuser_from_path(refresh_storage_path)
+            if refreshed_authuser != authuser:
+                raise ValueError("Refreshed storage selected a different notebooklm.authuser")
+            csrf, session_id = await _fetch_tokens_with_jar(
+                cookie_jar, refresh_storage_path, authuser=authuser
+            )
             return csrf, session_id, True
         finally:
             _REFRESH_ATTEMPTED_CONTEXT.reset(refresh_token)
@@ -1769,7 +1810,9 @@ async def _rotate_cookies(client: httpx.AsyncClient, storage_path: Path | None =
 
 
 async def _fetch_tokens_with_jar(
-    cookie_jar: httpx.Cookies, storage_path: Path | None = None
+    cookie_jar: httpx.Cookies,
+    storage_path: Path | None = None,
+    authuser: int = 0,
 ) -> tuple[str, str]:
     """Internal: fetch CSRF and session tokens using a pre-built cookie jar.
 
@@ -1793,13 +1836,18 @@ async def _fetch_tokens_with_jar(
         httpx.HTTPError: If request fails
         ValueError: If tokens cannot be extracted from response
     """
+    authuser = _validate_authuser(authuser)
     logger.debug("Fetching CSRF and session tokens from NotebookLM")
 
     async with httpx.AsyncClient(cookies=cookie_jar) as client:
         await _poke_session(client, storage_path)
 
+        homepage_url = "https://notebooklm.google.com/"
+        if authuser:
+            homepage_url += f"?authuser={authuser}"
         response = await client.get(
-            "https://notebooklm.google.com/",
+            homepage_url,
+            headers={"x-goog-authuser": str(authuser)},
             follow_redirects=True,
             timeout=30.0,
         )
@@ -1807,7 +1855,6 @@ async def _fetch_tokens_with_jar(
 
         final_url = str(response.url)
 
-        # Check if we were redirected to login
         if is_google_auth_redirect(final_url):
             raise ValueError(
                 "Authentication expired or invalid. "
@@ -1852,8 +1899,11 @@ async def fetch_tokens(
         ValueError: If tokens cannot be extracted from response
         RuntimeError: If ``NOTEBOOKLM_REFRESH_CMD`` is set but fails
     """
+    authuser = _authuser_from_path(storage_path) if storage_path is not None else 0
     jar = build_cookie_jar(cookies=cookies, storage_path=storage_path)
-    csrf, session_id, refreshed = await _fetch_tokens_with_refresh(jar, storage_path, profile)
+    csrf, session_id, refreshed = await _fetch_tokens_with_refresh(
+        jar, storage_path, profile, authuser=authuser
+    )
     if refreshed:
         fresh = _cookie_map_from_jar(jar)
         _update_cookie_input(cookies, fresh)
@@ -1884,7 +1934,10 @@ async def fetch_tokens_with_domains(
     """
     if path is None and (profile is not None or "NOTEBOOKLM_AUTH_JSON" not in os.environ):
         path = get_storage_path(profile=profile)
+    authuser = _authuser_from_path(path)
     jar = build_httpx_cookies_from_storage(path)
-    csrf, session_id, _ = await _fetch_tokens_with_refresh(jar, path, profile)
+    csrf, session_id, _ = await _fetch_tokens_with_refresh(
+        jar, path, profile, authuser=authuser
+    )
     save_cookies_to_storage(jar, path)
     return csrf, session_id
